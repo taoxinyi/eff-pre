@@ -1,4 +1,4 @@
-# bm-pre
+# eff-pre
 An efficient Proxy Re-encryption library in JavaScript without pairing.
 > It's an implement of paper `Efficient Unidirectional Proxy Re-encryption`
 
