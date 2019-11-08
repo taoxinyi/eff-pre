@@ -1,119 +1,66 @@
 # eff-pre
 An efficient Proxy Re-encryption library in JavaScript without pairing.
+
+It supports encrypt, decrypt, rekeyGen, reEnc, sign and verify.
 > It's an implement of paper `Efficient Unidirectional Proxy Re-encryption`
 
-> Currently using curve BLS12-381 curve (G1) in `mcl-wasm` for speed.
+> Currently using curve SECP256K1 as default curve.
 
 ## Usage
-This library is static utility library, which can be used in the following class `PREClient` and `PREProxy`
+Using high level function in class `PREClient` and `PREProxy`.
 ```javascript
-const PRE = require("eff-pre");
+const {PRE, PREClient, PREProxy} = require("eff-pre");
 const crypto = require("crypto");
 
-class PREClient {
-    constructor(g, {sk = undefined} = {}) {
-        this.g = g;
-        this.pk = undefined;
-        this.sk = undefined;
-    }
+const L0 = 32; // longest byte size can be encrypted
+const L1 = 16; // customized length
+PRE.init(L0, L1, PRE.CURVE.SECP256K1).then(() => {
+  const A = new PREClient();
+  const B = new PREClient();
+  const C = new PREClient();
+  // the message to be encrypted
+  // it should be no longer than L0, usually AES key
+  const M = crypto.randomBytes(L0);
+  A.keyGen();
+  B.keyGen();
+  C.keyGen();
+  const pkA = A.getPk();
+  const pkB = B.getPk();
 
-    keyGen() {
-        [this.sk, this.pk] = PRE.keyGen(this.g);
-        return [this.sk, this.pk]
-    }
+  // test A encrypt and decrypt on his own
+  const c1 = A.enc(M, {transformable: true});
+  const [valid1, d1] = A.dec(c1);
+  console.log("A Dec [transformable]:", valid1, "Same:", d1.equals(M));
 
-    loadKey(sk) {
-        this.sk = PRE.parseSk(sk);
-        this.pk = PRE.pkFromSk(this.g, this.sk);
+  // test A shares c1 to B with P, so that B can decrypt
+  // usecase: A want to share already encrypted information with B
+  //          without download, decrypt, encrypt with B's pk and send to B
+  //          by send reKey to proxy P, P will transfer the ciphertext so that B can decrypt.
 
-    }
+  const reKeyA2B = A.reKeyGen(pkB);
+  const [valid2, c2] = PREProxy.reEnc(c1, reKeyA2B, pkA);
+  console.log("ReEnc:", valid2);
+  const [valid3, d2] = B.dec(c2);
+  console.log("B Dec:", valid3, "Same:", d2.equals(M));
+  // C (others) cannot decrypt
+  console.log("C Dec:", C.dec(c2)[0]);
 
-    getSk() {
-        return PRE.keyToBuf(this.sk)
-    }
+  // sign and verify
+  const sig = A.sign(M);
+  const verified = PREClient.verify(M, sig, pkA);
+  console.log("Signature verified", verified);
 
-    getPk() {
-        return PRE.keyToBuf(this.pk)
-    }
-
-    reKeyGen(to) {
-        to = PRE.parsePk(to);
-        return PRE.reKeyGen(this.g, this.sk, this.pk, to)
-
-    }
-
-    enc(M, {to = this.pk, transformable = true} = {}) {
-        to = PRE.parsePk(to);
-        if (transformable)
-            return PRE.enc1(this.g, M, to);
-        else
-            return PRE.enc2(this.g, M, to);
-    }
-
-    dec(C) {
-        return C.length === PRE.C1LEN ?
-            PRE.dec1(this.g, C, this.sk, this.pk) :
-            PRE.dec2(this.g, C, this.sk, this.pk)
-
-    }
-
-
-}
-
-class PREProxy {
-    constructor(g) {
-        this.g = g;
-    }
-
-    reEnc(C1, reKey, owner) {
-        owner = PRE.parsePk(owner);
-        return PRE.reEnc(this.g, reKey, C1, owner)
-    }
-}
-
-PRE.init().then(g => {
-    const A = new PREClient(g);
-    const B = new PREClient(g);
-    const P = new PREProxy(g);
-
-    A.keyGen();
-    B.keyGen();
-
-    const pkA = A.getPk();
-    const pkB = B.getPk();
-    console.log(pkA.toString('hex'));
-    console.log(pkB.toString('hex'));
-
-    //generate random message, recommend it to be symmetric(e.g AES) key.
-    const m = crypto.randomBytes(PRE.L0);
-    console.log(m.toString('hex'));
-    //A encrypt and decrypt on his own
-    const encrypted = A.enc(m);
-    const [decStatus, decrypted] = A.dec(encrypted);
-    console.log(decrypted.toString('hex'), decStatus);
-
-    //A generate reKey(A->B) with B's public key
-    const rkey = A.reKeyGen(pkB);
-    //P re-encrypt with rkey and encrypted, (use pkA to verify owner of encrypted)
-    const [reEncStatus, reEncrypted] = P.reEnc(encrypted, rkey, pkA);
-    //now B can decrypt it
-    const [reDecStatus, reDecrypted] = B.dec(reEncrypted);
-    console.log(reDecrypted.toString('hex'), reDecStatus);
-
-    //anyone can create non-transformable ciphertext using receiver's public key
-    const ntEncrypted = B.enc(m, {to: pkA, transformable: false});
-    const [ntDecStatus, ntDecrypted] = A.dec(ntEncrypted);
-    console.log(ntDecrypted.toString('hex'), ntDecStatus);
-    //others cannot decrypt above ciphertext
-    const C = new PREClient(g);
-    C.keyGen();
-    console.log(C.dec(encrypted)[0]);
-    console.log(C.dec(reEncrypted)[0]);
-    console.log(C.dec(ntEncrypted)[0]);
+  // message that cannot be shared
+  // usecase: A want to encrypt private information with no intention of sharing
+  const c3 = A.enc(M, {transformable: false});
+  const [valid4, d3] = A.dec(c3);
+  console.log("A Dec [non-transformable]:", valid4, "Same:", d3.equals(M));
+  const [valid5, c4] = PREProxy.reEnc(c3, reKeyA2B, pkA);
+  console.log("ReEnc:", valid5); // cannot reEnc non-transformable ciphertext
 
 }).catch(r => {
-    console.log(r)
-})
+  console.log(r)
+});
 ```
 
 ## Reference
