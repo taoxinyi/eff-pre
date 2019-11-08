@@ -1,6 +1,6 @@
 {
   "name": "eff-pre",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "An efficient Proxy Re-encryption library in JavaScript without pairing.",
   "main": "eff-pre.js",
   "scripts": {
